@@ -6,6 +6,7 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 public class ServerHandler {
@@ -23,21 +24,30 @@ public class ServerHandler {
         logger.info(() -> "server channel: " + serverChannel);
 
         selector = Selector.open();
-        serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+        final SelectionKey selectionKey = serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+        selectionKey.attach((Consumer<SelectionKey>) this::handleAccept);
         logger.info(() -> "selector: " + selector);
 
         while (true) {
-            selector.select(this::accept);
+            selector.select(this::callback);
         }
     }
 
-    private void accept(SelectionKey selectionKey) {
+    // expects that attachment has been initialized with a Consumer<SelectionKey>
+    private void callback(SelectionKey selectionKey) {
+        final Consumer<SelectionKey> keyConsumer = (Consumer<SelectionKey>) selectionKey.attachment();
+        if (keyConsumer != null) {
+            keyConsumer.accept(selectionKey);
+        } else {
+            logger.severe("attachment missing");
+        }
+    }
+
+    private void handleAccept(SelectionKey selectionKey) {
         try {
             if (selectionKey.isAcceptable()) {
                 final SocketChannel clientChannel = serverChannel.accept();
                 new ClientHandler(selector, clientChannel);
-            } else {
-                ((ClientHandler) selectionKey.attachment()).handle(selectionKey);
             }
         } catch (IOException e) {
             throw new RuntimeException("failed to accept", e);
