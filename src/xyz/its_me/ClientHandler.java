@@ -42,6 +42,7 @@ class ClientHandler {
         if (!clientChannel.isConnected()) {
             return;
         }
+        moveRequestBuffers();
         if (clientKey.isReadable()) {
             logger.info(() -> "will read from channel: " + clientChannel);
             if (clientRequestBuffer == null) {
@@ -49,19 +50,16 @@ class ClientHandler {
             }
             try {
                 clientChannel.read(clientRequestBuffer);
-                logger.info(() -> "read bytes " + clientRequestBuffer.position());
-                if (serviceRequestBuffer == null) {
-                    serviceRequestBuffer = clientRequestBuffer;
-                    serviceRequestBuffer.flip();
-                    clientRequestBuffer = null;
-                } else {
-                    clientKey.interestOpsAnd(~OP_READ);
-                }
-                if (serviceRequestBuffer.position() > 0) {
-                    serviceKey.interestOpsOr(OP_WRITE);
-                }
             } catch (IOException e) {
-                throw new RuntimeException("failed to read", e);
+                throw new RuntimeException("failed to read from client", e);
+            }
+            logger.info(() -> "read bytes " + clientRequestBuffer.position());
+            moveRequestBuffers();
+            if (clientRequestBuffer != null && !clientRequestBuffer.hasRemaining()) {
+                clientKey.interestOpsAnd(~OP_READ);
+            }
+            if (serviceRequestBuffer != null && serviceRequestBuffer.hasRemaining()) {
+                serviceKey.interestOpsOr(OP_WRITE);
             }
         }
     }
@@ -79,24 +77,39 @@ class ClientHandler {
             if (connected) {
                 serviceKey.interestOpsAnd(~OP_CONNECT);
             }
-            if (serviceRequestBuffer != null) {
-                serviceKey.interestOpsOr(OP_WRITE);
-            }
         } else if (serviceKey.isWritable()) {
-            if (serviceRequestBuffer.remaining() > 0) {
-                logger.info(() -> "will write service bytes " + serviceRequestBuffer.remaining());
-                try {
-                    serviceChannel.write(serviceRequestBuffer);
-                    logger.info(() -> "remaining service write bytes " + serviceRequestBuffer.remaining());
-                } catch (IOException e) {
-                    throw new RuntimeException("failed to write to service", e);
-                }
-                if (serviceRequestBuffer.remaining() == 0) {
-                    serviceRequestBuffer = null;
-                    serviceKey.interestOpsAnd(~OP_WRITE);
-                    clientKey.interestOpsOr(OP_READ);
-                }
+            writeToService();
+        }
+    }
+
+    private void writeToService() {
+        if (serviceRequestBuffer == null) {
+            serviceKey.interestOpsAnd(~OP_WRITE);
+            return;
+        }
+        if (serviceRequestBuffer.hasRemaining()) {
+            logger.info(() -> "will write service bytes " + serviceRequestBuffer.remaining());
+            try {
+                serviceChannel.write(serviceRequestBuffer);
+                logger.info(() -> "remaining service write bytes " + serviceRequestBuffer.remaining());
+            } catch (IOException e) {
+                throw new RuntimeException("failed to write to service", e);
             }
+        } else {
+            serviceRequestBuffer = null;
+            serviceKey.interestOpsAnd(~OP_WRITE);
+            clientKey.interestOpsOr(OP_READ);
+        }
+        moveRequestBuffers();
+    }
+
+    private void moveRequestBuffers() {
+        if (serviceRequestBuffer == null && clientRequestBuffer != null) {
+            serviceRequestBuffer = clientRequestBuffer;
+            clientRequestBuffer = null;
+            serviceRequestBuffer.flip();
+            clientKey.interestOpsOr(OP_READ);
+            serviceKey.interestOpsOr(OP_WRITE);
         }
     }
 }
