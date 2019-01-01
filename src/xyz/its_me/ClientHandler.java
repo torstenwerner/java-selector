@@ -38,11 +38,11 @@ class ClientHandler {
         final boolean status = serviceChannel.connect(REMOTE_ADDRESS);
     }
 
-    private void handleClient(SelectionKey selectionKey) {
+    private void handleClient() {
         if (!clientChannel.isConnected()) {
             return;
         }
-        if (selectionKey.isReadable()) {
+        if (clientKey.isReadable()) {
             logger.info(() -> "will read from channel: " + clientChannel);
             if (clientRequestBuffer == null) {
                 clientRequestBuffer = ByteBuffer.allocate(CAPACITY);
@@ -66,8 +66,8 @@ class ClientHandler {
         }
     }
 
-    private void handleService(SelectionKey selectionKey) {
-        if (selectionKey.isConnectable()) {
+    private void handleService() {
+        if (serviceKey.isConnectable()) {
             logger.info(() -> "google connected " + serviceChannel);
             final boolean connected;
             try {
@@ -77,12 +77,12 @@ class ClientHandler {
             }
             logger.info(() -> "google connected " + serviceChannel);
             if (connected) {
-                selectionKey.interestOpsAnd(~OP_CONNECT);
+                serviceKey.interestOpsAnd(~OP_CONNECT);
             }
             if (serviceRequestBuffer != null) {
                 serviceKey.interestOpsOr(OP_WRITE);
             }
-        } else if (selectionKey.isWritable()) {
+        } else if (serviceKey.isWritable()) {
             if (serviceRequestBuffer.remaining() > 0) {
                 logger.info(() -> "will write service bytes " + serviceRequestBuffer.remaining());
                 try {

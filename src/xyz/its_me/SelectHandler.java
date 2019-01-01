@@ -5,7 +5,6 @@ import java.nio.channels.ClosedChannelException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.spi.AbstractSelectableChannel;
-import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 public class SelectHandler {
@@ -18,7 +17,7 @@ public class SelectHandler {
 
     void start() {
         try {
-            new ServerHandler(this).start();
+            new ServerHandler(this);
             while (true) {
                 selector.select(this::callback);
             }
@@ -27,7 +26,7 @@ public class SelectHandler {
         }
     }
 
-    SelectionKey register(AbstractSelectableChannel channel, int ops, Consumer<SelectionKey> callback) {
+    SelectionKey register(AbstractSelectableChannel channel, int ops, Runnable callback) {
         try {
             return channel.register(selector, ops, callback);
         } catch (ClosedChannelException e) {
@@ -35,11 +34,11 @@ public class SelectHandler {
         }
     }
 
-    // expects that attachment has been initialized with a Consumer<SelectionKey>
+    // expects that attachment has been initialized with a Runnable
     private void callback(SelectionKey selectionKey) {
-        final Consumer<SelectionKey> keyConsumer = (Consumer<SelectionKey>) selectionKey.attachment();
+        final Runnable keyConsumer = (Runnable) selectionKey.attachment();
         if (keyConsumer != null) {
-            keyConsumer.accept(selectionKey);
+            keyConsumer.run();
         } else {
             logger.severe("attachment missing");
         }

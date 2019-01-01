@@ -14,23 +14,21 @@ public class ServerHandler {
 
     private static final int PORT = 7777;
 
-    private ServerSocketChannel serverChannel;
+    private final ServerSocketChannel serverChannel;
     private final SelectHandler selectHandler;
+    private final SelectionKey selectionKey;
 
-    public ServerHandler(SelectHandler selectHandler) {
+    public ServerHandler(SelectHandler selectHandler) throws IOException {
         this.selectHandler = selectHandler;
-    }
-
-    void start() throws IOException {
         serverChannel = ServerSocketChannel.open();
         serverChannel.bind(new InetSocketAddress(PORT));
         serverChannel.configureBlocking(false);
         logger.info(() -> "server channel: " + serverChannel);
 
-        selectHandler.register(serverChannel, OP_ACCEPT, this::handleAccept);
+        selectionKey = selectHandler.register(serverChannel, OP_ACCEPT, this::handleAccept);
     }
 
-    private void handleAccept(SelectionKey selectionKey) {
+    private void handleAccept() {
         try {
             if (selectionKey.isAcceptable()) {
                 final SocketChannel clientChannel = serverChannel.accept();
