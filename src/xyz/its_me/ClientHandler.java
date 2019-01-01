@@ -44,44 +44,55 @@ class ClientHandler {
         }
         moveRequestBuffers();
         if (clientKey.isReadable()) {
-            logger.info(() -> "will read from channel: " + clientChannel);
-            if (clientRequestBuffer == null) {
-                clientRequestBuffer = ByteBuffer.allocate(CAPACITY);
-            }
-            try {
-                clientChannel.read(clientRequestBuffer);
-            } catch (IOException e) {
-                throw new RuntimeException("failed to read from client", e);
-            }
-            logger.info(() -> "read bytes " + clientRequestBuffer.position());
-            moveRequestBuffers();
-            if (clientRequestBuffer != null && !clientRequestBuffer.hasRemaining()) {
-                clientKey.interestOpsAnd(~OP_READ);
-            }
-            if (serviceRequestBuffer != null && serviceRequestBuffer.hasRemaining()) {
-                serviceKey.interestOpsOr(OP_WRITE);
-            }
+            readFromClient();
+        }
+    }
+
+    private void readFromClient() {
+        logger.info(() -> "will read from channel: " + clientChannel);
+        if (clientRequestBuffer == null) {
+            clientRequestBuffer = ByteBuffer.allocate(CAPACITY);
+        }
+        try {
+            clientChannel.read(clientRequestBuffer);
+        } catch (IOException e) {
+            throw new RuntimeException("failed to read from client", e);
+        }
+        logger.info(() -> "read bytes " + clientRequestBuffer.position());
+        moveRequestBuffers();
+        if (clientRequestBuffer != null && !clientRequestBuffer.hasRemaining()) {
+            clientKey.interestOpsAnd(~OP_READ);
+        }
+        if (serviceRequestBuffer != null && serviceRequestBuffer.hasRemaining()) {
+            serviceKey.interestOpsOr(OP_WRITE);
         }
     }
 
     private void handleService() {
         if (serviceKey.isConnectable()) {
-            logger.info(() -> "google connected " + serviceChannel);
-            final boolean connected;
-            try {
-                connected = serviceChannel.finishConnect();
-            } catch (IOException e) {
-                throw new RuntimeException("failed to finish connection", e);
-            }
-            logger.info(() -> "google connected " + serviceChannel);
-            if (connected) {
-                serviceKey.interestOpsAnd(~OP_CONNECT);
-            }
-        } else if (serviceKey.isWritable()) {
+            finishConnectToService();
+        }
+        if (serviceKey.isWritable()) {
             writeToService();
+        }
+        moveRequestBuffers();
+    }
+
+    private void finishConnectToService() {
+        logger.info(() -> "google connected " + serviceChannel);
+        final boolean connected;
+        try {
+            connected = serviceChannel.finishConnect();
+        } catch (IOException e) {
+            throw new RuntimeException("failed to finish connection", e);
+        }
+        logger.info(() -> "google connected " + serviceChannel);
+        if (connected) {
+            serviceKey.interestOpsAnd(~OP_CONNECT);
         }
     }
 
+    // serviceChannel must be connected
     private void writeToService() {
         if (serviceRequestBuffer == null) {
             serviceKey.interestOpsAnd(~OP_WRITE);
@@ -95,7 +106,8 @@ class ClientHandler {
             } catch (IOException e) {
                 throw new RuntimeException("failed to write to service", e);
             }
-        } else {
+        }
+        if (!serviceRequestBuffer.hasRemaining()){
             serviceRequestBuffer = null;
             serviceKey.interestOpsAnd(~OP_WRITE);
             clientKey.interestOpsOr(OP_READ);
