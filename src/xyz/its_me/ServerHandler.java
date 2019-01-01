@@ -15,7 +15,11 @@ public class ServerHandler {
     private static final int PORT = 7777;
 
     private ServerSocketChannel serverChannel;
-    private Selector selector;
+    private final Selector selector;
+
+    public ServerHandler(Selector selector) {
+        this.selector = selector;
+    }
 
     void start() throws IOException {
         serverChannel = ServerSocketChannel.open();
@@ -23,24 +27,8 @@ public class ServerHandler {
         serverChannel.configureBlocking(false);
         logger.info(() -> "server channel: " + serverChannel);
 
-        selector = Selector.open();
         final SelectionKey selectionKey = serverChannel.register(selector, SelectionKey.OP_ACCEPT);
         selectionKey.attach((Consumer<SelectionKey>) this::handleAccept);
-        logger.info(() -> "selector: " + selector);
-
-        while (true) {
-            selector.select(this::callback);
-        }
-    }
-
-    // expects that attachment has been initialized with a Consumer<SelectionKey>
-    private void callback(SelectionKey selectionKey) {
-        final Consumer<SelectionKey> keyConsumer = (Consumer<SelectionKey>) selectionKey.attachment();
-        if (keyConsumer != null) {
-            keyConsumer.accept(selectionKey);
-        } else {
-            logger.severe("attachment missing");
-        }
     }
 
     private void handleAccept(SelectionKey selectionKey) {
