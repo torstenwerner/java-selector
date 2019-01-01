@@ -10,7 +10,7 @@ import java.util.logging.Logger;
 import static java.nio.channels.SelectionKey.*;
 
 class ClientHandler {
-    public static final InetSocketAddress REMOTE_ADDRESS = new InetSocketAddress("google.com", 80);
+    public static final InetSocketAddress REMOTE_ADDRESS = new InetSocketAddress("localhost", 8080);
 
     private final Logger logger = Logger.getLogger(getClass().getName());
 
@@ -46,6 +46,9 @@ class ClientHandler {
         if (clientKey.isReadable()) {
             readFromClient();
         }
+        if (clientKey.isWritable()) {
+            writeToClient();
+        }
     }
 
     private void readFromClient() {
@@ -53,19 +56,46 @@ class ClientHandler {
         if (clientRequestBuffer == null) {
             clientRequestBuffer = ByteBuffer.allocate(CAPACITY);
         }
+        if (!clientRequestBuffer.hasRemaining()) {
+            clientKey.interestOpsAnd(~OP_READ);
+            return;
+        }
         try {
             clientChannel.read(clientRequestBuffer);
         } catch (IOException e) {
             throw new RuntimeException("failed to read from client", e);
         }
+        if (clientRequestBuffer.position() == 0) {
+            clientKey.interestOpsAnd(~OP_READ);
+            return;
+        }
         logger.info(() -> "read bytes " + clientRequestBuffer.position());
         moveRequestBuffers();
-        if (clientRequestBuffer != null && !clientRequestBuffer.hasRemaining()) {
-            clientKey.interestOpsAnd(~OP_READ);
-        }
         if (serviceRequestBuffer != null && serviceRequestBuffer.hasRemaining()) {
             serviceKey.interestOpsOr(OP_WRITE);
         }
+    }
+
+    private void writeToClient() {
+        if (clientResponseBuffer == null) {
+            clientKey.interestOpsAnd(~OP_WRITE);
+            return;
+        }
+        if (clientResponseBuffer.hasRemaining()) {
+            logger.info(() -> "will write service bytes " + clientResponseBuffer.remaining());
+            try {
+                clientChannel.write(clientResponseBuffer);
+                logger.info(() -> "remaining client write bytes " + clientResponseBuffer.remaining());
+            } catch (IOException e) {
+                throw new RuntimeException("failed to write to client", e);
+            }
+        }
+        if (!clientResponseBuffer.hasRemaining()){
+            clientResponseBuffer = null;
+            clientKey.interestOpsAnd(~OP_WRITE);
+            serviceKey.interestOpsOr(OP_READ);
+        }
+        moveResponseBuffers();
     }
 
     private void handleService() {
@@ -76,6 +106,9 @@ class ClientHandler {
             writeToService();
         }
         moveRequestBuffers();
+        if (serviceKey.isReadable()) {
+            readFromService();
+        }
     }
 
     private void finishConnectToService() {
@@ -89,10 +122,12 @@ class ClientHandler {
         logger.info(() -> "google connected " + serviceChannel);
         if (connected) {
             serviceKey.interestOpsAnd(~OP_CONNECT);
+            serviceKey.interestOpsOr(OP_READ);
         }
     }
 
     // serviceChannel must be connected
+
     private void writeToService() {
         if (serviceRequestBuffer == null) {
             serviceKey.interestOpsAnd(~OP_WRITE);
@@ -114,6 +149,30 @@ class ClientHandler {
         }
         moveRequestBuffers();
     }
+    private void readFromService() {
+        logger.info(() -> "will read from channel: " + serviceChannel);
+        if (serviceResponseBuffer == null) {
+            serviceResponseBuffer = ByteBuffer.allocate(CAPACITY);
+        }
+        if (!serviceResponseBuffer.hasRemaining()) {
+            serviceKey.interestOpsAnd(~OP_READ);
+            return;
+        }
+        try {
+            serviceChannel.read(serviceResponseBuffer);
+        } catch (IOException e) {
+            throw new RuntimeException("failed to read from service", e);
+        }
+        if (serviceResponseBuffer.position() == 0) {
+            serviceKey.interestOpsAnd(~OP_READ);
+            return;
+        }
+        logger.info(() -> "read bytes " + serviceResponseBuffer.position());
+        moveResponseBuffers();
+        if (clientResponseBuffer != null && clientResponseBuffer.hasRemaining()) {
+            clientKey.interestOpsOr(OP_WRITE);
+        }
+    }
 
     private void moveRequestBuffers() {
         if (serviceRequestBuffer == null && clientRequestBuffer != null) {
@@ -122,6 +181,16 @@ class ClientHandler {
             serviceRequestBuffer.flip();
             clientKey.interestOpsOr(OP_READ);
             serviceKey.interestOpsOr(OP_WRITE);
+        }
+    }
+
+    private void moveResponseBuffers() {
+        if (clientResponseBuffer == null && serviceResponseBuffer != null) {
+            clientResponseBuffer = serviceResponseBuffer;
+            serviceResponseBuffer = null;
+            clientResponseBuffer.flip();
+            serviceKey.interestOpsOr(OP_READ);
+            clientKey.interestOpsOr(OP_WRITE);
         }
     }
 }
