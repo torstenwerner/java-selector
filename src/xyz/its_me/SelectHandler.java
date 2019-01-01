@@ -1,8 +1,10 @@
 package xyz.its_me;
 
 import java.io.IOException;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
+import java.nio.channels.spi.AbstractSelectableChannel;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -16,12 +18,20 @@ public class SelectHandler {
 
     void start() {
         try {
-            new ServerHandler(selector).start();
+            new ServerHandler(this).start();
             while (true) {
                 selector.select(this::callback);
             }
         } catch (IOException e) {
             throw new RuntimeException("failed to run SelectHandler", e);
+        }
+    }
+
+    void register(AbstractSelectableChannel channel, int ops, Consumer<SelectionKey> callback) {
+        try {
+            channel.register(selector, ops, callback);
+        } catch (ClosedChannelException e) {
+            throw new RuntimeException("failed to register channel with selector");
         }
     }
 

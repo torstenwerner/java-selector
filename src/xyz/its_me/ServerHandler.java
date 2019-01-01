@@ -3,11 +3,11 @@ package xyz.its_me;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
-import java.util.function.Consumer;
 import java.util.logging.Logger;
+
+import static java.nio.channels.SelectionKey.OP_ACCEPT;
 
 public class ServerHandler {
     private final Logger logger = Logger.getLogger(getClass().getName());
@@ -15,10 +15,10 @@ public class ServerHandler {
     private static final int PORT = 7777;
 
     private ServerSocketChannel serverChannel;
-    private final Selector selector;
+    private final SelectHandler selectHandler;
 
-    public ServerHandler(Selector selector) {
-        this.selector = selector;
+    public ServerHandler(SelectHandler selectHandler) {
+        this.selectHandler = selectHandler;
     }
 
     void start() throws IOException {
@@ -27,15 +27,14 @@ public class ServerHandler {
         serverChannel.configureBlocking(false);
         logger.info(() -> "server channel: " + serverChannel);
 
-        final SelectionKey selectionKey = serverChannel.register(selector, SelectionKey.OP_ACCEPT);
-        selectionKey.attach((Consumer<SelectionKey>) this::handleAccept);
+        selectHandler.register(serverChannel, OP_ACCEPT, this::handleAccept);
     }
 
     private void handleAccept(SelectionKey selectionKey) {
         try {
             if (selectionKey.isAcceptable()) {
                 final SocketChannel clientChannel = serverChannel.accept();
-                new ClientHandler(selector, clientChannel);
+                new ClientHandler(selectHandler, clientChannel);
             }
         } catch (IOException e) {
             throw new RuntimeException("failed to accept", e);

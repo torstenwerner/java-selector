@@ -4,10 +4,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
-import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 import static java.nio.channels.SelectionKey.OP_CONNECT;
@@ -21,25 +19,23 @@ class ClientHandler {
     // arbitrarily small for testing
     private static final int CAPACITY = 128;
 
-    private final Selector selector;
+    private final SelectHandler selectHandler;
     private final SocketChannel clientChannel;
     private final SocketChannel serviceChannel;
     private final ByteBuffer requestBuffer = ByteBuffer.allocateDirect(CAPACITY);
     private final ByteBuffer responseBuffer = ByteBuffer.allocateDirect(CAPACITY);
 
-    ClientHandler(Selector selector, SocketChannel clientChannel) throws IOException {
-        this.selector = selector;
+    ClientHandler(SelectHandler selectHandler, SocketChannel clientChannel) throws IOException {
+        this.selectHandler = selectHandler;
 
         this.clientChannel = clientChannel;
         clientChannel.configureBlocking(false);
         logger.info(() -> "client channel: " + clientChannel);
-        final SelectionKey clientKey = clientChannel.register(selector, OP_READ);
-        clientKey.attach((Consumer<SelectionKey>) this::handleClient);
+        selectHandler.register(clientChannel, OP_READ, this::handleClient);
 
         serviceChannel = SocketChannel.open();
         serviceChannel.configureBlocking(false);
-        final SelectionKey selectionKey = serviceChannel.register(selector, OP_CONNECT);
-        selectionKey.attach((Consumer<SelectionKey>) this::handleService);
+        selectHandler.register(serviceChannel, OP_CONNECT, this::handleService);
         final boolean status = serviceChannel.connect(REMOTE_ADDRESS);
     }
 
