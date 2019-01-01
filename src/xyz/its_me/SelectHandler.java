@@ -27,9 +27,9 @@ public class SelectHandler {
         }
     }
 
-    void register(AbstractSelectableChannel channel, int ops, Consumer<SelectionKey> callback) {
+    SelectionKey register(AbstractSelectableChannel channel, int ops, Consumer<SelectionKey> callback) {
         try {
-            channel.register(selector, ops, callback);
+            return channel.register(selector, ops, callback);
         } catch (ClosedChannelException e) {
             throw new RuntimeException("failed to register channel with selector");
         }

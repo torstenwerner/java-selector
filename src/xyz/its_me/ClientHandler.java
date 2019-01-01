@@ -5,11 +5,9 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
-import java.nio.charset.StandardCharsets;
 import java.util.logging.Logger;
 
-import static java.nio.channels.SelectionKey.OP_CONNECT;
-import static java.nio.channels.SelectionKey.OP_READ;
+import static java.nio.channels.SelectionKey.*;
 
 class ClientHandler {
     public static final InetSocketAddress REMOTE_ADDRESS = new InetSocketAddress("google.com", 80);
@@ -19,23 +17,24 @@ class ClientHandler {
     // arbitrarily small for testing
     private static final int CAPACITY = 128;
 
-    private final SelectHandler selectHandler;
     private final SocketChannel clientChannel;
+    private final SelectionKey clientKey;
+    private ByteBuffer clientRequestBuffer;
+    private ByteBuffer clientResponseBuffer;
     private final SocketChannel serviceChannel;
-    private final ByteBuffer requestBuffer = ByteBuffer.allocateDirect(CAPACITY);
-    private final ByteBuffer responseBuffer = ByteBuffer.allocateDirect(CAPACITY);
+    private final SelectionKey serviceKey;
+    private ByteBuffer serviceRequestBuffer;
+    private ByteBuffer serviceResponseBuffer;
 
     ClientHandler(SelectHandler selectHandler, SocketChannel clientChannel) throws IOException {
-        this.selectHandler = selectHandler;
-
         this.clientChannel = clientChannel;
         clientChannel.configureBlocking(false);
         logger.info(() -> "client channel: " + clientChannel);
-        selectHandler.register(clientChannel, OP_READ, this::handleClient);
+        this.clientKey = selectHandler.register(clientChannel, OP_READ, this::handleClient);
 
         serviceChannel = SocketChannel.open();
         serviceChannel.configureBlocking(false);
-        selectHandler.register(serviceChannel, OP_CONNECT, this::handleService);
+        this.serviceKey = selectHandler.register(serviceChannel, OP_CONNECT, this::handleService);
         final boolean status = serviceChannel.connect(REMOTE_ADDRESS);
     }
 
@@ -45,16 +44,25 @@ class ClientHandler {
         }
         if (selectionKey.isReadable()) {
             logger.info(() -> "will read from channel: " + clientChannel);
+            if (clientRequestBuffer == null) {
+                clientRequestBuffer = ByteBuffer.allocate(CAPACITY);
+            }
             try {
-                clientChannel.read(requestBuffer);
+                clientChannel.read(clientRequestBuffer);
+                logger.info(() -> "read bytes " + clientRequestBuffer.position());
+                if (serviceRequestBuffer == null) {
+                    serviceRequestBuffer = clientRequestBuffer;
+                    serviceRequestBuffer.flip();
+                    clientRequestBuffer = null;
+                } else {
+                    clientKey.interestOpsAnd(~OP_READ);
+                }
+                if (serviceRequestBuffer.position() > 0) {
+                    serviceKey.interestOpsOr(OP_WRITE);
+                }
             } catch (IOException e) {
                 throw new RuntimeException("failed to read", e);
             }
-            logger.info(() -> "read remaining: " + requestBuffer.remaining());
-            requestBuffer.flip();
-            final String data = StandardCharsets.UTF_8.decode(requestBuffer).toString();
-            logger.info(() -> "data: " + data);
-            requestBuffer.clear();
         }
     }
 
@@ -70,6 +78,24 @@ class ClientHandler {
             logger.info(() -> "google connected " + serviceChannel);
             if (connected) {
                 selectionKey.interestOpsAnd(~OP_CONNECT);
+            }
+            if (serviceRequestBuffer != null) {
+                serviceKey.interestOpsOr(OP_WRITE);
+            }
+        } else if (selectionKey.isWritable()) {
+            if (serviceRequestBuffer.remaining() > 0) {
+                logger.info(() -> "will write service bytes " + serviceRequestBuffer.remaining());
+                try {
+                    serviceChannel.write(serviceRequestBuffer);
+                    logger.info(() -> "remaining service write bytes " + serviceRequestBuffer.remaining());
+                } catch (IOException e) {
+                    throw new RuntimeException("failed to write to service", e);
+                }
+                if (serviceRequestBuffer.remaining() == 0) {
+                    serviceRequestBuffer = null;
+                    serviceKey.interestOpsAnd(~OP_WRITE);
+                    clientKey.interestOpsOr(OP_READ);
+                }
             }
         }
     }
