@@ -17,36 +17,43 @@ class ClientHandler {
     // arbitrarily small for testing
     private static final int CAPACITY = 128;
 
+    private final SelectHandler selectHandler;
+
     private final SocketChannel clientChannel;
     private final SelectionKey clientKey;
     private ByteBuffer clientRequestBuffer;
     private ByteBuffer clientResponseBuffer;
-    private final SocketChannel serviceChannel;
-    private final SelectionKey serviceKey;
+    private SocketChannel serviceChannel;
+    private SelectionKey serviceKey;
     private ByteBuffer serviceRequestBuffer;
     private ByteBuffer serviceResponseBuffer;
 
     ClientHandler(SelectHandler selectHandler, SocketChannel clientChannel) throws IOException {
+        this.selectHandler = selectHandler;
         this.clientChannel = clientChannel;
+
         clientChannel.configureBlocking(false);
         logger.info(() -> "client channel: " + clientChannel);
         this.clientKey = selectHandler.register(clientChannel, OP_READ, this::handleClient);
 
+        initializeService();
+    }
+
+    private void initializeService() throws IOException {
         serviceChannel = SocketChannel.open();
         serviceChannel.configureBlocking(false);
         this.serviceKey = selectHandler.register(serviceChannel, OP_CONNECT, this::handleService);
-        final boolean status = serviceChannel.connect(REMOTE_ADDRESS);
+        serviceChannel.connect(REMOTE_ADDRESS);
     }
 
     private void handleClient() {
-        if (!clientChannel.isConnected()) {
-            return;
+        if (clientChannel.isConnected()) {
+            moveRequestBuffers();
+            if (clientKey.isReadable()) {
+                readFromClient(); // may close the channel
+            }
         }
-        moveRequestBuffers();
-        if (clientKey.isReadable()) {
-            readFromClient();
-        }
-        if (clientKey.isWritable()) {
+        if (clientChannel.isConnected() && clientKey.isWritable()) {
             writeToClient();
         }
     }
@@ -61,15 +68,19 @@ class ClientHandler {
             return;
         }
         try {
-            clientChannel.read(clientRequestBuffer);
+            final int count = clientChannel.read(clientRequestBuffer);
+            if (count < 0) {
+                logger.warning("error reading from client, will shutdown connection");
+                clientKey.interestOps(0);
+                serviceKey.interestOps(0);
+                clientChannel.close();
+                serviceChannel.close();
+                return;
+            }
+            logger.info(() -> "read bytes " + count);
         } catch (IOException e) {
             throw new RuntimeException("failed to read from client", e);
         }
-        if (clientRequestBuffer.position() == 0) {
-            clientKey.interestOpsAnd(~OP_READ);
-            return;
-        }
-        logger.info(() -> "read bytes " + clientRequestBuffer.position());
         moveRequestBuffers();
         if (serviceRequestBuffer != null && serviceRequestBuffer.hasRemaining()) {
             serviceKey.interestOpsOr(OP_WRITE);
@@ -90,7 +101,7 @@ class ClientHandler {
                 throw new RuntimeException("failed to write to client", e);
             }
         }
-        if (!clientResponseBuffer.hasRemaining()){
+        if (!clientResponseBuffer.hasRemaining()) {
             clientResponseBuffer = null;
             clientKey.interestOpsAnd(~OP_WRITE);
             serviceKey.interestOpsOr(OP_READ);
@@ -102,11 +113,13 @@ class ClientHandler {
         if (serviceKey.isConnectable()) {
             finishConnectToService();
         }
-        if (serviceKey.isWritable()) {
-            writeToService();
+        if (serviceChannel.isConnected()) {
+            if (serviceKey.isWritable()) {
+                writeToService(); // may close the channel
+            }
+            moveRequestBuffers();
         }
-        moveRequestBuffers();
-        if (serviceKey.isReadable()) {
+        if (serviceChannel.isConnected() && serviceKey.isReadable()) {
             readFromService();
         }
     }
@@ -142,13 +155,14 @@ class ClientHandler {
                 throw new RuntimeException("failed to write to service", e);
             }
         }
-        if (!serviceRequestBuffer.hasRemaining()){
+        if (!serviceRequestBuffer.hasRemaining()) {
             serviceRequestBuffer = null;
             serviceKey.interestOpsAnd(~OP_WRITE);
             clientKey.interestOpsOr(OP_READ);
         }
         moveRequestBuffers();
     }
+
     private void readFromService() {
         logger.info(() -> "will read from channel: " + serviceChannel);
         if (serviceResponseBuffer == null) {
@@ -159,7 +173,15 @@ class ClientHandler {
             return;
         }
         try {
-            serviceChannel.read(serviceResponseBuffer);
+            final int count = serviceChannel.read(serviceResponseBuffer);
+            if (count < 0) {
+                logger.warning("error reading from service, will reconnect");
+                serviceKey.interestOps(0);
+                serviceChannel.close();
+                initializeService();
+                return;
+            }
+            logger.info(() -> "read bytes " + count);
         } catch (IOException e) {
             throw new RuntimeException("failed to read from service", e);
         }
@@ -167,7 +189,6 @@ class ClientHandler {
             serviceKey.interestOpsAnd(~OP_READ);
             return;
         }
-        logger.info(() -> "read bytes " + serviceResponseBuffer.position());
         moveResponseBuffers();
         if (clientResponseBuffer != null && clientResponseBuffer.hasRemaining()) {
             clientKey.interestOpsOr(OP_WRITE);
